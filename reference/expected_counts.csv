@@ -1,0 +1,37 @@
+dataset,pipeline,session,n_subjects,note
+hbcd_1.0,*,,1426,HBCD release notes R1.0: participants (release total; per-derivative counts not documented)
+hbcd_1.0,*,ses-V01,1426,HBCD release notes R1.0: visits
+hbcd_1.0,*,ses-V02,660,HBCD release notes R1.0: visits
+hbcd_1.0,*,ses-V03,121,HBCD release notes R1.0: visits
+hbcd_1.1,*,,1426,HBCD release notes R1.1: participants (release total; per-derivative counts not documented)
+hbcd_1.1,*,ses-V01,1426,HBCD release notes R1.1: visits
+hbcd_1.1,*,ses-V02,660,HBCD release notes R1.1: visits
+hbcd_1.1,*,ses-V03,121,HBCD release notes R1.1: visits
+hbcd_2.0,*,,3605,HBCD release notes R2.0: participants (release total; per-derivative counts not documented)
+hbcd_2.0,*,ses-V01,3545,HBCD release notes R2.0: visits
+hbcd_2.0,*,ses-V02,2310,HBCD release notes R2.0: visits
+hbcd_2.0,*,ses-V03,1398,HBCD release notes R2.0: visits
+hbcd_2.0,*,ses-V04,679,HBCD release notes R2.0: visits
+hbcd_2.0,*,ses-V05,483,HBCD release notes R2.0: visits
+hbcd_2.1,*,,3605,HBCD release notes R2.1: participants (same as 2.0)
+hbcd_2.1,*,ses-V01,3545,HBCD release notes R2.1: visits
+hbcd_2.1,*,ses-V02,2310,HBCD release notes R2.1: visits
+hbcd_2.1,*,ses-V03,1398,HBCD release notes R2.1: visits
+hbcd_2.1,*,ses-V04,679,HBCD release notes R2.1: visits
+hbcd_2.1,*,ses-V05,483,HBCD release notes R2.1: visits
+abcd_7.0,fmriprep,ses-00A,11685,ABCC participant counts (page labelled v4.1.0; may be 7.1 - verify); session labels assumed
+abcd_7.0,fmriprep,ses-02A,8043,same
+abcd_7.0,fmriprep,ses-04A,6303,same
+abcd_7.0,fmriprep,ses-06A,3797,same
+abcd_7.0,xcp,ses-00A,10396,same
+abcd_7.0,xcp,ses-02A,7654,same
+abcd_7.0,xcp,ses-04A,6147,same
+abcd_7.0,xcp,ses-06A,3756,same
+abcd_7.0,qsiprep,ses-00A,9163,same
+abcd_7.0,qsiprep,ses-02A,7276,same
+abcd_7.0,qsiprep,ses-04A,6063,same
+abcd_7.0,qsiprep,ses-06A,3675,same
+abcd_7.0,reprotm,ses-00A,6035,same
+abcd_7.0,reprotm,ses-02A,5767,same
+abcd_7.0,reprotm,ses-04A,5380,same
+abcd_7.0,reprotm,ses-06A,3492,same

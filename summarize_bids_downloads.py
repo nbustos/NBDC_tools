@@ -16,6 +16,8 @@ Outputs (in --outdir):
     subject_coverage.csv         subject x source matrix (1 = present)
     (source/pipeline summaries also include n_expected_subjects and pct_subjects_downloaded,
      relative to the full release's participants.tsv -- see EXPECTED below)
+    expected_vs_downloaded.csv   downloaded vs documented counts from --expected-counts (default
+                                 reference/expected_counts.csv): per dataset/pipeline/session
     dataset_summary.csv          estimated total size (GB/TB) per dataset = sum over rawdata + all derivatives
     parameters.csv               one row per derivative source: [environment] version + all [workflow]
                                  parameters, read from sub-*/log/<run>/*.toml (e.g. xcp_d.toml)
@@ -265,6 +267,33 @@ def collect_parameters(sub_src, n_check=3):
     return pd.DataFrame(rows)
 
 
+def compare_to_reference(long_df, ref_path):
+    """
+    Compare downloaded subjects with documented counts.
+    Reference CSV columns: dataset, pipeline, session, n_subjects, note
+      dataset  substring of the dataset key, e.g. 'hbcd_2.1' or 'abcd_7.0'
+      pipeline substring of the source folder name (case-insensitive, versions merged),
+               or '*' for the whole release (any source)
+      session  e.g. ses-V02, or blank for all sessions (unique subjects)
+    """
+    ref = pd.read_csv(ref_path, dtype=str, keep_default_na=False)
+    rows = []
+    for _, r in ref.iterrows():
+        for ds in sorted(d for d in long_df["dataset"].unique() if r["dataset"].lower() in d.lower()):
+            d = long_df[long_df["dataset"] == ds]
+            if r["pipeline"] != "*":
+                d = d[d["source"].str.lower().str.contains(r["pipeline"].lower(), regex=False)]
+            matched = ";".join(sorted(d["source"].unique())) or "(none)"
+            if r["session"]:
+                d = d[d["session"] == r["session"]]
+            n_have, n_exp = d["subject"].nunique(), int(r["n_subjects"])
+            rows.append(dict(dataset=ds, pipeline=r["pipeline"], matched_sources=matched,
+                             session=r["session"] or "all", n_downloaded=n_have, n_documented=n_exp,
+                             pct_downloaded=round(100 * n_have / n_exp, 1) if n_exp else 0.0,
+                             note=r["note"]))
+    return pd.DataFrame(rows)
+
+
 def scan_source(dataset, source, source_type, path):
     rows = []
     sub_root = find_subject_root(path)
@@ -451,6 +480,10 @@ def main():
     ap.add_argument("--no-rawdata", action="store_true", help="Only summarize derivatives")
     ap.add_argument("--size-sample", type=int, default=5,
                     help="Subjects to measure per source for the size estimate (0 = skip sizes)")
+    default_ref = Path(__file__).resolve().parent / "reference" / "expected_counts.csv"
+    ap.add_argument("--expected-counts", default=str(default_ref) if default_ref.is_file() else None,
+                    help="CSV of documented per-release/pipeline/session subject counts "
+                         "(default: reference/expected_counts.csv next to this script)")
     ap.add_argument("--seed", type=int, default=0, help="Random seed for subject sampling")
     args = ap.parse_args()
 
@@ -490,6 +523,9 @@ def main():
     src_summary = add_download_fraction(src_summary, sub_src, "source")
     pipe_summary = add_download_fraction(pipe_summary, sub_pipe, "pipeline")
 
+    # Downloaded vs documented counts (from reference CSV)
+    vs_ref = compare_to_reference(long_df, args.expected_counts) if args.expected_counts else pd.DataFrame()
+
     # Whole-dataset size estimate = sum over all sources (rawdata + each derivative version)
     ds_summary = None
     if "est_total_gb" in src_summary:
@@ -516,6 +552,8 @@ def main():
     src_summary.to_csv(outdir / "source_summary.csv", index=False)
     pipe_summary.to_csv(outdir / "pipeline_summary.csv", index=False)
     coverage.to_csv(outdir / "subject_coverage.csv", index=False)
+    if not vs_ref.empty:
+        vs_ref.to_csv(outdir / "expected_vs_downloaded.csv", index=False)
     if ds_summary is not None:
         ds_summary.to_csv(outdir / "dataset_summary.csv", index=False)
     if not params.empty:
@@ -544,6 +582,9 @@ def main():
             "pct_subjects_downloaded", "n_multi_session", "pct_multi_session"]
     cols += [c for c in ["est_total_gb"] if c in pipe_summary]
     print(pipe_summary[cols].to_string(index=False))
+    if not vs_ref.empty:
+        print("\n=== Downloaded vs documented subjects (reference CSV) ===")
+        print(vs_ref.drop(columns=["note"]).to_string(index=False))
     if ds_summary is not None:
         print("\n=== Estimated total size per dataset (rawdata + all derivatives) ===")
         print(ds_summary.to_string(index=False))

@@ -14,6 +14,8 @@ Outputs (in --outdir):
     source_summary.csv           counts per source (rawdata, each derivative version)
     pipeline_summary.csv         counts per pipeline type (versions merged, e.g. all freesurfer-*)
     subject_coverage.csv         subject x source matrix (1 = present)
+    (source/pipeline summaries also include n_expected_subjects and pct_subjects_downloaded,
+     relative to the full release's participants.tsv -- see EXPECTED below)
     dataset_summary.csv          estimated total size (GB/TB) per dataset = sum over rawdata + all derivatives
     parameters.csv               one row per derivative source: [environment] version + all [workflow]
                                  parameters, read from sub-*/log/<run>/*.toml (e.g. xcp_d.toml)
@@ -77,6 +79,49 @@ def pipeline_type(source_name):
 
 
 SUBJECT_ROOTS = {}  # (dataset, source) -> Path containing sub-* folders
+EXPECTED = {}  # dataset -> (set of sub-* ids in the full release, basis string)
+
+
+def load_expected_subjects(root):
+    """
+    Full-release subject list = participants.tsv (BIDS) at <root>/ or <root>/rawdata/.
+    Returns a set of 'sub-XXXX' ids, or None if no participants file is found.
+    """
+    for cand in (Path(root) / "participants.tsv", Path(root) / "rawdata" / "participants.tsv"):
+        if cand.is_file():
+            try:
+                df = pd.read_csv(cand, sep="\t", dtype=str)
+            except Exception as e:  # noqa: BLE001
+                print(f"  [warn] could not read {cand}: {e}", file=sys.stderr)
+                continue
+            col = "participant_id" if "participant_id" in df.columns else df.columns[0]
+            ids = df[col].dropna().astype(str).str.strip()
+            ids = ids.where(ids.str.startswith("sub-"), "sub-" + ids)
+            return set(ids), f"participants.tsv ({cand.parent.name}/)"
+    return None
+
+
+def add_download_fraction(summary, subj_df, group_col):
+    """Add n_expected_subjects / pct_subjects_downloaded / expected_basis to a per-source or per-pipeline summary."""
+    exp_n, pct, basis = [], [], []
+    for _, r in summary.iterrows():
+        ds = r["dataset"]
+        exp, how = EXPECTED.get(ds, (None, None))
+        have = set(subj_df[(subj_df["dataset"] == ds) & (subj_df[group_col] == r[group_col])]["subject"])
+        if exp:
+            n_have, n_exp = len(have & exp), len(exp)
+        else:  # no participants.tsv: fall back to everything seen in any source of this dataset
+            exp = set(subj_df[subj_df["dataset"] == ds]["subject"])
+            n_have, n_exp, how = len(have), len(exp), "union of downloaded subjects (no participants.tsv)"
+        exp_n.append(n_exp)
+        pct.append(round(100 * n_have / n_exp, 1) if n_exp else 0.0)
+        basis.append(how)
+    out = summary.copy()
+    i = out.columns.get_loc("n_subjects") + 1
+    out.insert(i, "n_expected_subjects", exp_n)
+    out.insert(i + 1, "pct_subjects_downloaded", pct)
+    out["expected_basis"] = basis
+    return out
 
 
 def dir_size_bytes(path):
@@ -247,6 +292,13 @@ def scan_dataset(root, include_rawdata=True):
     dataset =f"{root.parent.name}/{root.name}" if root.parent.name else root.name
     print(f"\nScanning {root}  (dataset = {dataset})")
     rows = []
+    exp = load_expected_subjects(root)
+    if exp:
+        EXPECTED[dataset] = exp
+        print(f"  full release: {len(exp[0])} subjects ({exp[1]})")
+    else:
+        print("  [warn] no participants.tsv found; % downloaded will be relative to subjects seen on disk",
+              file=sys.stderr)
     if include_rawdata and (root / "rawdata").is_dir():
         rows += scan_source(dataset, "rawdata", "rawdata", root / "rawdata")
     deriv_dir = root / "derivatives"
@@ -434,6 +486,10 @@ def main():
         gb = src_summary.groupby(["dataset", "pipeline"])["est_total_gb"].sum().round(1).reset_index()
         pipe_summary = pipe_summary.merge(gb, on=["dataset", "pipeline"], how="left")
 
+    # Fraction of the full release downloaded (subjects)
+    src_summary = add_download_fraction(src_summary, sub_src, "source")
+    pipe_summary = add_download_fraction(pipe_summary, sub_pipe, "pipeline")
+
     # Whole-dataset size estimate = sum over all sources (rawdata + each derivative version)
     ds_summary = None
     if "est_total_gb" in src_summary:
@@ -479,11 +535,13 @@ def main():
 
     pd.set_option("display.width", 200)
     print("\n=== Per source ===")
-    cols = ["dataset", "source", "n_subjects", "n_single_session", "n_multi_session", "pct_multi_session"]
+    cols = ["dataset", "source", "n_subjects", "n_expected_subjects", "pct_subjects_downloaded",
+            "n_single_session", "n_multi_session", "pct_multi_session"]
     cols += [c for c in ["gb_per_session", "est_total_gb"] if c in src_summary]
     print(src_summary[cols].to_string(index=False))
     print("\n=== Per pipeline type ===")
-    cols = ["dataset", "pipeline", "n_versions", "n_subjects", "n_multi_session", "pct_multi_session"]
+    cols = ["dataset", "pipeline", "n_versions", "n_subjects", "n_expected_subjects",
+            "pct_subjects_downloaded", "n_multi_session", "pct_multi_session"]
     cols += [c for c in ["est_total_gb"] if c in pipe_summary]
     print(pipe_summary[cols].to_string(index=False))
     if ds_summary is not None:

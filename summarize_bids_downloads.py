@@ -14,6 +14,7 @@ Outputs (in --outdir):
     source_summary.csv           counts per source (rawdata, each derivative version)
     pipeline_summary.csv         counts per pipeline type (versions merged, e.g. all freesurfer-*)
     subject_coverage.csv         subject x source matrix (1 = present)
+    dataset_summary.csv          estimated total size (GB/TB) per dataset = sum over rawdata + all derivatives
     parameters.csv               one row per derivative source: [environment] version + all [workflow]
                                  parameters, read from sub-*/log/<run>/*.toml (e.g. xcp_d.toml)
     plots/*.png
@@ -433,6 +434,14 @@ def main():
         gb = src_summary.groupby(["dataset", "pipeline"])["est_total_gb"].sum().round(1).reset_index()
         pipe_summary = pipe_summary.merge(gb, on=["dataset", "pipeline"], how="left")
 
+    # Whole-dataset size estimate = sum over all sources (rawdata + each derivative version)
+    ds_summary = None
+    if "est_total_gb" in src_summary:
+        ds_summary = (src_summary.groupby("dataset")
+                      .agg(n_sources=("source", "nunique"), est_total_gb=("est_total_gb", "sum"))
+                      .round(1).reset_index())
+        ds_summary["est_total_tb"] = (ds_summary["est_total_gb"] / 1000).round(2)
+
     # Subject x source coverage
     coverage = (long_df.drop_duplicates(["dataset", "source", "subject"])
                 .assign(present=1)
@@ -451,6 +460,8 @@ def main():
     src_summary.to_csv(outdir / "source_summary.csv", index=False)
     pipe_summary.to_csv(outdir / "pipeline_summary.csv", index=False)
     coverage.to_csv(outdir / "subject_coverage.csv", index=False)
+    if ds_summary is not None:
+        ds_summary.to_csv(outdir / "dataset_summary.csv", index=False)
     if not params.empty:
         params.to_csv(outdir / "parameters.csv", index=False)
 
@@ -475,6 +486,12 @@ def main():
     cols = ["dataset", "pipeline", "n_versions", "n_subjects", "n_multi_session", "pct_multi_session"]
     cols += [c for c in ["est_total_gb"] if c in pipe_summary]
     print(pipe_summary[cols].to_string(index=False))
+    if ds_summary is not None:
+        print("\n=== Estimated total size per dataset (rawdata + all derivatives) ===")
+        print(ds_summary.to_string(index=False))
+        if len(ds_summary) > 1:
+            print(f"All datasets: ~{ds_summary['est_total_gb'].sum():,.1f} GB "
+                  f"({ds_summary['est_total_gb'].sum() / 1000:,.2f} TB)")
     if not params.empty:
         print("\n=== Pipeline versions & parameters ([environment] version, [workflow]) ===")
         meta = ["dataset", "pipeline", "source", "env_version", "params_consistent"]

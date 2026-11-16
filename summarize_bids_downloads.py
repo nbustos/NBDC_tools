@@ -14,6 +14,8 @@ Outputs (in --outdir):
     source_summary.csv           counts per source (rawdata, each derivative version)
     pipeline_summary.csv         counts per pipeline type (versions merged, e.g. all freesurfer-*)
     subject_coverage.csv         subject x source matrix (1 = present)
+    parameters.csv               one row per derivative source: [environment] version + all [workflow]
+                                 parameters, read from sub-*/log/<run>/*.toml (e.g. xcp_d.toml)
     plots/*.png
 
 Usage:
@@ -26,6 +28,14 @@ import os
 import re
 import sys
 from pathlib import Path
+
+try:
+    import tomllib  # Python >= 3.11
+except ImportError:  # pragma: no cover
+    try:
+        import tomli as tomllib
+    except ImportError:
+        tomllib = None
 
 import pandas as pd
 import matplotlib
@@ -127,6 +137,85 @@ def estimate_sizes(sub_src, n_sample=5, seed=0):
             est_total_gb=round(est, 1),
         ))
         print(f"  {src:<35} sampled {len(sizes)} subj -> ~{gb_per_session:.2f} GB/session, est {est:,.1f} GB")
+    return pd.DataFrame(rows)
+
+
+def _parse_toml_simple(text):
+    """Minimal fallback TOML reader (sections + scalar/array values) for Pythons without tomllib."""
+    import ast
+    out, cur = {}, None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            cur = out.setdefault(line[1:-1].strip(), {})
+        elif "=" in line and cur is not None:
+            k, v = (x.strip() for x in line.split("=", 1))
+            v = v.replace("true", "True").replace("false", "False")
+            try:
+                cur[k] = ast.literal_eval(v)
+            except (ValueError, SyntaxError):
+                cur[k] = v.strip('"')
+    return out
+
+
+def read_toml(path):
+    text = Path(path).read_text()
+    return tomllib.loads(text) if tomllib else _parse_toml_simple(text)
+
+
+def find_log_toml(sub_dir):
+    """Newest <sub>/log/<run>/*.toml, or None."""
+    log = Path(sub_dir) / "log"
+    for run in reversed(list_dirs(log, "")):
+        try:
+            tomls = sorted(f for f in os.listdir(log / run) if f.endswith(".toml"))
+        except OSError:
+            continue
+        if tomls:
+            return log / run / tomls[0]
+    return None
+
+
+def collect_parameters(sub_src, n_check=3):
+    """
+    For each derivative source, read the run-config TOML from the first subjects that have one and
+    return one row: [environment] version + every [workflow] parameter.
+    If the first n_check subjects disagree, the first is reported and 'params_consistent' is False.
+    """
+    rows = []
+    for (ds, src), d in sub_src.groupby(["dataset", "source"]):
+        root = SUBJECT_ROOTS.get((ds, src))
+        if root is None or src == "rawdata":
+            continue
+        found = []
+        for sub in d["subject"]:
+            t = find_log_toml(root / sub)
+            if t is not None:
+                try:
+                    cfg = read_toml(t)
+                except Exception as e:  # noqa: BLE001
+                    print(f"  [warn] could not parse {t}: {e}", file=sys.stderr)
+                    continue
+                found.append((sub, t, cfg))
+                if len(found) >= n_check:
+                    break
+        if not found:
+            print(f"  {src:<35} no log/*.toml found")
+            continue
+        sub, t, cfg = found[0]
+        wf = cfg.get("workflow", {})
+        consistent = all(c.get("workflow", {}) == wf and
+                         c.get("environment", {}).get("version") == cfg.get("environment", {}).get("version")
+                         for _, _, c in found[1:])
+        row = dict(dataset=ds, source=src, pipeline=pipeline_type(src),
+                   env_version=cfg.get("environment", {}).get("version"),
+                   params_consistent=consistent, config_file=t.name, example_subject=sub)
+        row.update({k: str(v) if isinstance(v, (list, dict)) else v for k, v in wf.items()})
+        rows.append(row)
+        if not consistent:
+            print(f"  [warn] {src}: parameters differ between sampled subjects; reporting {sub}")
     return pd.DataFrame(rows)
 
 
@@ -352,12 +441,18 @@ def main():
                 .reset_index())
     coverage.columns.name = None
 
+    # Pipeline versions + parameters from log/*.toml
+    print("\nReading pipeline parameters from sub-*/log/*/*.toml ...")
+    params = collect_parameters(sub_src)
+
     # CSVs
     long_df.to_csv(outdir / "subject_sessions_long.csv", index=False)
     sub_src.to_csv(outdir / "subject_summary.csv", index=False)
     src_summary.to_csv(outdir / "source_summary.csv", index=False)
     pipe_summary.to_csv(outdir / "pipeline_summary.csv", index=False)
     coverage.to_csv(outdir / "subject_coverage.csv", index=False)
+    if not params.empty:
+        params.to_csv(outdir / "parameters.csv", index=False)
 
     # Plots
     p = outdir / "plots"
@@ -380,6 +475,16 @@ def main():
     cols = ["dataset", "pipeline", "n_versions", "n_subjects", "n_multi_session", "pct_multi_session"]
     cols += [c for c in ["est_total_gb"] if c in pipe_summary]
     print(pipe_summary[cols].to_string(index=False))
+    if not params.empty:
+        print("\n=== Pipeline versions & parameters ([environment] version, [workflow]) ===")
+        meta = ["dataset", "pipeline", "source", "env_version", "params_consistent"]
+        wf_cols = [c for c in params.columns if c not in meta + ["config_file", "example_subject"]]
+        for _, r in params.iterrows():
+            print(f"\n{r['source']}  (dataset {r['dataset']}, version {r['env_version']}, "
+                  f"from {r['config_file']} in {r['example_subject']})")
+            for c in wf_cols:
+                if pd.notna(r[c]):
+                    print(f"    {c:<22} {r[c]}")
     print(f"\nWrote CSVs and plots to {outdir.resolve()}")
 
 
